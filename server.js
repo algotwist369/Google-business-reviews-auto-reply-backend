@@ -1,0 +1,135 @@
+require('dotenv').config();
+const express = require('express');
+const passport = require('passport');
+const mongoose = require('mongoose');
+
+// Import configurations
+const connectDB = require('./config/database');
+const configurePassport = require('./config/passport');
+const configureApp = require('./config/app');
+const validateEnv = require('./config/validateEnv');
+const { errorHandler } = require('./utils/errorHandler');
+const autoReplyService = require('./services/autoReplyService');
+
+// Import routes
+console.log('Loading routes...');
+const authRoutes = require('./routes/authRoutes');
+console.log('✓ authRoutes loaded');
+const userRoutes = require('./routes/userRoutes');
+console.log('✓ userRoutes loaded');
+const reviewsRoutes = require('./routes/reviewsRoutes');
+console.log('✓ reviewsRoutes loaded');
+const autoReplyRoutes = require('./routes/autoReplyRoutes');
+console.log('✓ autoReplyRoutes loaded');
+const superAdminRoutes = require('./routes/superAdminRoutes');
+console.log('✓ superAdminRoutes loaded');
+
+// Validate environment configuration early
+validateEnv();
+
+// Initialize Express app
+const app = express();
+
+// Configure app middleware
+configureApp(app);
+
+// Initialize Passport
+app.use(passport.initialize());
+configurePassport();
+
+// Connect to MongoDB
+const dbPromise = connectDB();
+dbPromise
+    .then(() => autoReplyService.start())
+    .catch((error) => {
+        console.error('Failed to start auto-reply service:', error.message);
+    });
+
+// Health check endpoint (before routes for better performance)
+// Returns 200 if healthy, 503 if unhealthy (for load balancer/proxy health checks)
+app.get('/health', async (req, res) => {
+    try {
+        // Check MongoDB connection
+        const mongoStatus = mongoose.connection.readyState;
+        // 0 = disconnected, 1 = connected, 2 = connecting, 3 = disconnecting
+        const isDbConnected = mongoStatus === 1;
+
+        if (!isDbConnected) {
+            return res.status(503).json({
+                status: 'UNHEALTHY',
+                timestamp: new Date().toISOString(),
+                uptime: process.uptime(),
+                checks: {
+                    database: 'disconnected',
+                    statusCode: mongoStatus
+                }
+            });
+        }
+
+        // All checks passed
+        res.status(200).json({
+            status: 'OK',
+            timestamp: new Date().toISOString(),
+            uptime: process.uptime(),
+            checks: {
+                database: 'connected'
+            }
+        });
+    } catch (error) {
+        res.status(503).json({
+            status: 'UNHEALTHY',
+            timestamp: new Date().toISOString(),
+            uptime: process.uptime(),
+            error: error.message
+        });
+    }
+});
+
+// Routes
+console.log('Registering routes...');
+app.use('/auth', authRoutes);
+console.log('✓ /auth route registered');
+app.use('/api/user', userRoutes);
+console.log('✓ /api/user route registered');
+app.use('/api/reviews', reviewsRoutes);
+console.log('✓ /api/reviews route registered');
+app.use('/api/auto-reply', autoReplyRoutes);
+console.log('✓ /api/auto-reply route registered');
+app.use('/api/super-admin', superAdminRoutes);
+console.log('✓ /api/super-admin route registered');
+
+// 404 handler - must be after all routes
+// Note: Express 5 doesn't support wildcard '*' pattern in app.use()
+app.use((req, res, next) => {
+    res.status(404).json({
+        success: false,
+        error: `Route ${req.originalUrl} not found`
+    });
+});
+
+// Global error handler (must be last)
+app.use(errorHandler);
+
+// Start server
+const PORT = process.env.PORT || 5000;
+const server = app.listen(PORT, () => {
+    console.log(`Server running on port ${PORT}`);
+    console.log(`Environment: ${process.env.NODE_ENV || 'development'}`);
+});
+
+// Handle unhandled promise rejections
+process.on('unhandledRejection', (err) => {
+    console.error('Unhandled Promise Rejection:', err);
+    // Close server & exit process
+    server.close(() => {
+        process.exit(1);
+    });
+});
+
+// Handle uncaught exceptions
+process.on('uncaughtException', (err) => {
+    console.error('Uncaught Exception:', err);
+    process.exit(1);
+});
+
+module.exports = app;
