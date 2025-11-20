@@ -3,6 +3,8 @@ const AutoReplyTask = require('../models/AutoReplyTask');
 const googleApiService = require('./googleApiService');
 const reviewReplyGenerator = require('./reviewReplyGenerator');
 const { AUTO_REPLY, RATING_MAP } = require('../utils/constants');
+const websocketService = require('./websocketService');
+const cache = require('../utils/cache');
 require('dotenv').config();
 
 const SERVICE_ENABLED = process.env.AUTO_REPLY_SERVICE_ENABLED !== 'false';
@@ -14,6 +16,15 @@ class AutoReplyService {
     constructor() {
         this.interval = null;
         this.isRunning = false;
+    }
+
+    clearReviewCache(userId) {
+        if (!userId) return;
+        try {
+            cache.deleteByPrefix(`reviews:${userId.toString()}:`);
+        } catch (error) {
+            console.error('Failed to clear review cache for user', userId, error.message);
+        }
     }
 
     start() {
@@ -107,7 +118,7 @@ class AutoReplyService {
 
         const delayMs = settings.delayMinutes * 60 * 1000;
 
-        const { account, locationsWithReviews } = await this.fetchReviews(user);
+        const { account, locationsWithReviews, latestReviewTime } = await this.fetchReviews(user);
         if (!account) {
             return { skipped: true, reason: 'no-account' };
         }
@@ -116,11 +127,15 @@ class AutoReplyService {
         await this.generateReplies(user, settings);
         await this.dispatchReplies(user);
 
-        user.autoReplySettings = {
+        const nextSettings = {
             ...settings,
             lastRunAt: new Date(),
             lastManualRunAt: manual ? new Date() : settings.lastManualRunAt
         };
+        if (latestReviewTime) {
+            nextSettings.lastReviewSyncAt = new Date(latestReviewTime);
+        }
+        user.autoReplySettings = nextSettings;
         await user.save();
 
         return { success: true, account: account.name, reason };
@@ -131,24 +146,47 @@ class AutoReplyService {
             const accountResponse = await googleApiService.getAccounts(user.googleAccessToken);
             const account = accountResponse.accounts?.[0];
             if (!account) {
-                return { account: null, locationsWithReviews: [] };
+                return { account: null, locationsWithReviews: [], latestReviewTime: null };
             }
 
             const locations = await googleApiService.getLocations(user.googleAccessToken, account.name);
             if (!locations.length) {
-                return { account, locationsWithReviews: [] };
+                return { account, locationsWithReviews: [], latestReviewTime: null };
             }
+
+            const lastSync = user.autoReplySettings?.lastReviewSyncAt
+                ? new Date(user.autoReplySettings.lastReviewSyncAt)
+                : null;
+            const since =
+                lastSync && AUTO_REPLY.SYNC_LOOKBACK_HOURS
+                    ? new Date(lastSync.getTime() - AUTO_REPLY.SYNC_LOOKBACK_HOURS * 60 * 60 * 1000)
+                    : null;
 
             const locationsWithReviews = await googleApiService.batchFetchReviews(
                 user.googleAccessToken,
                 account.name,
-                locations
+                locations,
+                since ? { since } : {}
             );
 
-            return { account, locationsWithReviews };
+            let latestReviewTime = lastSync ? lastSync.getTime() : 0;
+            locationsWithReviews.forEach((loc) => {
+                (loc.reviews || []).forEach((review) => {
+                    const updatedAt = new Date(review.updateTime || review.createTime || 0).getTime();
+                    if (updatedAt > latestReviewTime) {
+                        latestReviewTime = updatedAt;
+                    }
+                });
+            });
+
+            return {
+                account,
+                locationsWithReviews,
+                latestReviewTime: latestReviewTime || null
+            };
         } catch (error) {
             console.error(`Failed to fetch reviews for user ${user._id}:`, error.message);
-            return { account: null, locationsWithReviews: [] };
+            return { account: null, locationsWithReviews: [], latestReviewTime: null };
         }
     }
 
@@ -196,6 +234,17 @@ class AutoReplyService {
                             }
                         }
                     );
+                    
+                    // Emit WebSocket event for skipped task
+                    try {
+                        websocketService.emitToUser(user._id.toString(), 'autoReply:task:updated', {
+                            reviewName,
+                            status: 'skipped'
+                        });
+                    } catch (error) {
+                        console.error('Failed to emit auto-reply task update:', error);
+                    }
+                    
                     continue;
                 }
 
@@ -240,8 +289,34 @@ class AutoReplyService {
         }
 
         if (newTasks.length) {
-            await AutoReplyTask.insertMany(newTasks, { ordered: false });
+            try {
+                await AutoReplyTask.insertMany(newTasks, { ordered: false });
+            } catch (error) {
+                if (error?.code === 11000) {
+                    console.warn(
+                        `[AutoReply] Skipped ${newTasks.length} duplicate tasks for user ${user._id}:`,
+                        error.message
+                    );
+                } else {
+                    throw error;
+                }
+            }
+
+            // Emit WebSocket event for new tasks (consolidated to prevent multiple API calls)
+            try {
+                // Emit single event that triggers both refreshes
+                websocketService.emitToUser(user._id.toString(), 'autoReply:tasks:created', {
+                    count: newTasks.length
+                });
+                // Also update stats
+                const stats = await this.getStatsForUser(user._id);
+                websocketService.emitToUser(user._id.toString(), 'autoReply:stats:updated', { stats });
+            } catch (error) {
+                console.error('Failed to emit auto-reply tasks created:', error);
+            }
         }
+
+        this.clearReviewCache(user._id);
     }
 
     async generateReplies(user, settings) {
@@ -278,15 +353,42 @@ class AutoReplyService {
                         customerName: result.customerName
                     }
                 });
+
+                // Emit WebSocket event for task update
+                try {
+                    websocketService.emitToUser(user._id.toString(), 'autoReply:task:updated', {
+                        taskId: task._id,
+                        status: 'scheduled'
+                    });
+                    // Update stats when task status changes
+                    const stats = await this.getStatsForUser(user._id);
+                    websocketService.emitToUser(user._id.toString(), 'autoReply:stats:updated', { stats });
+                } catch (error) {
+                    console.error('Failed to emit auto-reply task update:', error);
+                }
             } catch (error) {
                 console.error('Failed to generate reply:', error.message);
-                await AutoReplyTask.findByIdAndUpdate(task._id, {
-                    $set: {
+                const update = {
+                    status: 'generation_failed',
+                    error: error.message,
+                    lastTriedAt: new Date()
+                };
+
+                await AutoReplyTask.findOneAndUpdate(
+                    { _id: task._id, status: { $ne: 'sent' } },
+                    { $set: update }
+                );
+
+                // Emit WebSocket event for task failure
+                try {
+                    websocketService.emitToUser(user._id.toString(), 'autoReply:task:updated', {
+                        taskId: task._id,
                         status: 'generation_failed',
-                        error: error.message,
-                        lastTriedAt: new Date()
-                    }
-                });
+                        error: error.message
+                    });
+                } catch (wsError) {
+                    console.error('Failed to emit auto-reply task update:', wsError);
+                }
             }
         }
     }
@@ -320,6 +422,23 @@ class AutoReplyService {
                         lastTriedAt: new Date()
                     }
                 });
+
+                // Emit WebSocket event for successful reply (consolidated)
+                try {
+                    this.clearReviewCache(user._id);
+                    // Update stats
+                    const stats = await this.getStatsForUser(user._id);
+                    websocketService.emitToUser(user._id.toString(), 'autoReply:stats:updated', { stats });
+                    // Emit single event that will trigger refresh
+                    websocketService.emitToUser(user._id.toString(), 'autoReply:task:updated', {
+                        taskId: task._id,
+                        status: 'sent'
+                    });
+                    // Also refresh reviews since a reply was posted
+                    websocketService.emitToUser(user._id.toString(), 'reviews:refresh', {});
+                } catch (error) {
+                    console.error('Failed to emit auto-reply task update:', error);
+                }
             } catch (error) {
                 console.error('Failed to post auto-reply:', error.message);
                 await AutoReplyTask.findByIdAndUpdate(task._id, {
@@ -329,6 +448,16 @@ class AutoReplyService {
                         lastTriedAt: new Date()
                     }
                 });
+
+                // Emit WebSocket event for delivery failure
+                try {
+                    websocketService.emitToUser(user._id.toString(), 'autoReply:task:updated', {
+                        taskId: task._id,
+                        status: 'delivery_failed'
+                    });
+                } catch (wsError) {
+                    console.error('Failed to emit auto-reply task update:', wsError);
+                }
             }
         }
     }
@@ -339,7 +468,7 @@ class AutoReplyService {
             { $group: { _id: '$status', total: { $sum: 1 } } }
         ];
         const aggregates = await AutoReplyTask.aggregate(pipeline);
-        const stats = aggregates.reduce((acc, item) => {
+        const totals = aggregates.reduce((acc, item) => {
             acc[item._id] = item.total;
             return acc;
         }, {});
@@ -350,9 +479,14 @@ class AutoReplyService {
             sentAt: { $gte: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000) }
         });
 
+        const sentAllTime = totals.sent || 0;
+        const failedTotal = (totals.generation_failed || 0) + (totals.delivery_failed || 0);
+
         return {
-            totals: stats,
-            sentLast7d
+            totals,
+            sentLast7d,
+            sentAllTime,
+            failedTotal
         };
     }
 }

@@ -47,11 +47,70 @@ const RATING_MAP = {
 };
 
 const AUTO_REPLY = {
-    DEFAULT_DELAY_MINUTES: 15,
+    DEFAULT_DELAY_MINUTES: 5,
     DELAY_OPTIONS_MINUTES: [2, 5, 10, 15, 20, 30, 45, 60, 180, 360, 720, 1440],
     TONES: ['friendly', 'empathetic', 'professional', 'concise'],
     MAX_GENERATIONS_PER_CYCLE: 5,
-    MAX_DISPATCH_PER_CYCLE: 5
+    MAX_DISPATCH_PER_CYCLE: 5,
+    SYNC_LOOKBACK_HOURS: 12
+};
+
+// Subscription plans and pricing (amounts in paise - INR)
+const SUBSCRIPTION_PLANS = {
+    free: {
+        name: 'Free',
+        priceInPaise: 0,
+        currency: 'INR',
+        billingCycleDays: 0,
+        features: [
+            'Basic review management',
+            'Auto-reply to reviews',
+            'Manual replies only',
+            'Limited features'
+        ]
+    },
+    basic: {
+        name: 'Basic',
+        priceInPaise: 99900, // ₹999/month
+        currency: 'INR',
+        billingCycleDays: 30,
+        features: [
+            'Auto-reply to reviews',
+            'Custom reply tone',
+            'Reply delay settings',
+            'All review types'
+        ]
+    },
+    pro: {
+        name: 'Pro',
+        priceInPaise: 199900, // ₹1,999/month
+        currency: 'INR',
+        billingCycleDays: 30,
+        features: [
+            'Everything in Basic',
+            'Advanced AI replies',
+            'Priority support',
+            'Analytics dashboard'
+        ]
+    },
+    enterprise: {
+        name: 'Enterprise',
+        priceInPaise: 499900, // ₹4,999/month
+        currency: 'INR',
+        billingCycleDays: 30,
+        features: [
+            'Everything in Pro',
+            'Multiple locations',
+            'Custom integrations',
+            'Dedicated support'
+        ]
+    }
+};
+
+// Trial settings
+const TRIAL_SETTINGS = {
+    DEFAULT_DAYS: 5,
+    MAX_DAYS: 365
 };
 
 module.exports = {
@@ -61,6 +120,8 @@ module.exports = {
     FILTER_OPTIONS,
     SORT_OPTIONS,
     RATING_MAP,
-    AUTO_REPLY
+    AUTO_REPLY,
+    SUBSCRIPTION_PLANS,
+    TRIAL_SETTINGS
 };
 

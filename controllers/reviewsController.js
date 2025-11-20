@@ -5,6 +5,14 @@ const { normalizePagination, createPaginationMeta } = require('../utils/paginati
 const { FILTER_OPTIONS, SORT_OPTIONS, RATING_MAP, CACHE_TTL, PAGINATION } = require('../utils/constants');
 const { AppError } = require('../utils/errorHandler');
 const asyncHandler = require('../utils/asyncHandler');
+const websocketService = require('../services/websocketService');
+const reviewReplyGenerator = require('../services/reviewReplyGenerator');
+const autoReplyService = require('../services/autoReplyService');
+
+const isGoogleAuthError = (error) => {
+    if (!error?.message) return false;
+    return error.message.includes('Google API Error: 401') || error.message.includes('"status":"UNAUTHENTICATED"');
+};
 
 /**
  * Get all reviews with filtering, sorting, and pagination
@@ -147,10 +155,30 @@ const getReviews = asyncHandler(async (req, res) => {
         // Cache the response
         cache.set(cacheKey, response, CACHE_TTL.REVIEWS);
 
+        // Emit WebSocket event for real-time updates
+        try {
+            websocketService.emitToUser(user._id.toString(), 'reviews:updated', {
+                data: paginatedLocations,
+                meta: {
+                    totalReviews,
+                    filter: filterStatus,
+                    sort: sortOrder
+                }
+            });
+        } catch (error) {
+            console.error('Failed to emit reviews update:', error);
+        }
+
         res.json(response);
     } catch (error) {
         if (error instanceof AppError) {
             throw error;
+        }
+        if (isGoogleAuthError(error)) {
+            throw new AppError(
+                'Google authentication expired. Please reconnect your Google Business Profile account.',
+                403
+            );
         }
         console.error('Error fetching reviews:', error);
         throw new AppError('Failed to fetch reviews from Google API.', 500);
@@ -195,10 +223,23 @@ const getAllReviews = asyncHandler(async (req, res) => {
         // Cache the response
         cache.set(cacheKey, data, CACHE_TTL.REVIEWS);
 
+        // Emit WebSocket event for real-time updates
+        try {
+            websocketService.emitToUser(user._id.toString(), 'reviews:updated', { data });
+        } catch (error) {
+            console.error('Failed to emit reviews update:', error);
+        }
+
         res.json(data);
     } catch (error) {
         if (error instanceof AppError) {
             throw error;
+        }
+        if (isGoogleAuthError(error)) {
+            throw new AppError(
+                'Google authentication expired. Please reconnect your Google Business Profile account.',
+                403
+            );
         }
         console.error('Error fetching reviews:', error);
         throw new AppError('Failed to fetch reviews from Google API.', 500);
@@ -236,9 +277,19 @@ const replyToReview = asyncHandler(async (req, res) => {
         );
 
         // Clear cache for this user's reviews
-        const cachePattern = `reviews:${user._id}:*`;
-        // Note: In production, use Redis with pattern matching for better cache invalidation
-        cache.clear(); // Simple solution for now
+        cache.deleteByPrefix(`reviews:${user._id}:`);
+
+        // Emit WebSocket event for real-time updates
+        try {
+            websocketService.emitToUser(user._id.toString(), 'review:replied', {
+                reviewName,
+                message: 'Reply posted successfully'
+            });
+            // Also emit reviews update to refresh the list
+            websocketService.emitToUser(user._id.toString(), 'reviews:refresh', {});
+        } catch (error) {
+            console.error('Failed to emit review reply update:', error);
+        }
 
         res.json({
             success: true,
@@ -250,9 +301,39 @@ const replyToReview = asyncHandler(async (req, res) => {
     }
 });
 
+const generateAiReply = asyncHandler(async (req, res) => {
+    const { reviewName, reviewText, ratingValue, reviewerName, locationName } = req.body || {};
+    if (!reviewName || !reviewText) {
+        throw new AppError('Missing required fields: reviewName, reviewText', 400);
+    }
+
+    const settings = autoReplyService.normalizeSettings
+        ? autoReplyService.normalizeSettings(req.user.autoReplySettings)
+        : {
+            tone: req.user.autoReplySettings?.tone || 'friendly'
+        };
+
+    const payload = {
+        businessName: req.user.name || req.user.company || 'our team',
+        locationName: locationName || 'our business',
+        reviewerName: reviewerName || 'there',
+        ratingValue: ratingValue || 0,
+        reviewText,
+        tone: settings.tone || 'friendly'
+    };
+
+    const suggestion = await reviewReplyGenerator.generateReply(payload);
+
+    res.json({
+        success: true,
+        data: suggestion
+    });
+});
+
 module.exports = {
     getReviews,
     getAllReviews,
-    replyToReview
+    replyToReview,
+    generateAiReply
 };
 

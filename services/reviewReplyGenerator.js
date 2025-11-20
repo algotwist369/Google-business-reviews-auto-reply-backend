@@ -18,8 +18,9 @@ Customer review:
 Instructions:
 - Detect the customer's sentiment (positive, neutral, negative) by combining rating + text.
 - Extract the best possible customer name for a personalized reply (fallback to "there" if unknown).
-- Craft a reply that sounds like a human from the business, incorporates empathy, references specific review highlights, and invites further discussion if needed.
-- Keep the reply concise (no more than 2 sentences and under 220 characters).
+- Reply in the same language the customer used (detect automatically). If the review mixes languages, reply primarily in the dominant language while keeping key names intact.
+- Craft a reply that sounds like a human from the business, incorporates empathy, references specific review highlights, invites further discussion if needed, and varies wording to avoid repetitive phrasing.
+- Keep the reply concise (max 2 sentences, under 220 characters). Avoid canned phrases.
 - Return JSON with keys: sentiment (positive|neutral|negative), customer_name, summary, reply, style.
 `;
 

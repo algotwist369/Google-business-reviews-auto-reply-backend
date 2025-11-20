@@ -20,13 +20,31 @@ const configurePassport = () => {
             let user = await User.findOne({ googleId: profile.id });
 
             if (!user) {
+                // New user - set up 5-day free trial
+                const startDate = new Date();
+                const endDate = new Date();
+                endDate.setDate(endDate.getDate() + 5); // 5-day trial
+
                 user = new User({
                     googleId: profile.id,
                     name: profile.displayName,
                     email: profile.emails[0].value,
                     avatar: profile.photos[0].value,
                     googleAccessToken: accessToken,
-                    googleRefreshToken: refreshToken // Store refresh token if available
+                    googleRefreshToken: refreshToken, // Store refresh token if available
+                    trial: {
+                        enabled: true,
+                        startDate: startDate,
+                        endDate: endDate,
+                        days: 5,
+                        status: 'active'
+                    },
+                    subscription: {
+                        plan: 'trial',
+                        status: 'active',
+                        expiresAt: endDate,
+                        paymentProvider: 'none'
+                    }
                 });
             } else {
                 user.googleAccessToken = accessToken;

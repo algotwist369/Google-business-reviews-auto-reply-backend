@@ -1,7 +1,7 @@
 const mongoose = require('mongoose');
 
 const UserSchema = new mongoose.Schema({
-    googleId: { type: String, required: true, unique: true },
+    googleId: { type: String, required: true, unique: true }, // unique: true automatically creates an index
     name: { type: String },
     email: { type: String },
     avatar: { type: String },
@@ -13,8 +13,8 @@ const UserSchema = new mongoose.Schema({
     role: {
         type: String,
         enum: ['user', 'admin', 'super_admin'],
-        default: 'user',
-        index: true
+        default: 'user'
+        // Index defined below to avoid duplicate (removed index: true to prevent duplicate)
     },
 
     // Trial management
@@ -42,12 +42,23 @@ const UserSchema = new mongoose.Schema({
             enum: ['active', 'cancelled', 'expired', 'suspended'],
             default: 'active'
         },
-        expiresAt: { type: Date }
+        expiresAt: { type: Date },
+        paymentProvider: { type: String, enum: ['razorpay', 'manual', 'none'], default: 'none' },
+        razorpayCustomerId: { type: String },
+        razorpayPaymentId: { type: String },
+        razorpayOrderId: { type: String },
+        pendingOrder: {
+            orderId: { type: String },
+            plan: { type: String },
+            amount: { type: Number },
+            currency: { type: String },
+            createdAt: { type: Date }
+        }
     },
 
     autoReplySettings: {
         enabled: { type: Boolean, default: false },
-        delayMinutes: { type: Number, default: 30 },
+        delayMinutes: { type: Number, default: 5 },
         tone: {
             type: String,
             enum: ['friendly', 'empathetic', 'professional', 'concise'],
@@ -57,12 +68,24 @@ const UserSchema = new mongoose.Schema({
         respondToNeutral: { type: Boolean, default: true },
         respondToNegative: { type: Boolean, default: true },
         lastRunAt: { type: Date },
-        lastManualRunAt: { type: Date }
+        lastManualRunAt: { type: Date },
+        lastReviewSyncAt: { type: Date }
+    },
+    autoReplyStats: {
+        totals: {
+            type: Map,
+            of: Number,
+            default: {}
+        },
+        sentLast7d: { type: Number, default: 0 },
+        sentAllTime: { type: Number, default: 0 },
+        failedTotal: { type: Number, default: 0 },
+        updatedAt: { type: Date }
     }
 }, { timestamps: true });
 
 // Index for faster lookups
-UserSchema.index({ googleId: 1 });
+// Note: googleId index is automatically created by unique: true, so we don't need to define it again
 UserSchema.index({ email: 1 });
 UserSchema.index({ role: 1 });
 UserSchema.index({ 'trial.status': 1 });

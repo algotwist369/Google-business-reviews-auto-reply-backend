@@ -23,12 +23,18 @@ const autoReplyRoutes = require('./routes/autoReplyRoutes');
 console.log('✓ autoReplyRoutes loaded');
 const superAdminRoutes = require('./routes/superAdminRoutes');
 console.log('✓ superAdminRoutes loaded');
+const paymentRoutes = require('./routes/paymentRoutes');
+console.log('✓ paymentRoutes loaded');
+const { handleWebhook } = require('./controllers/paymentController');
 
 // Validate environment configuration early
 validateEnv();
 
 // Initialize Express app
 const app = express();
+
+// Payment webhook route (MUST be before JSON body parser)
+app.post('/api/payment/webhook', express.raw({ type: 'application/json' }), handleWebhook);
 
 // Configure app middleware
 configureApp(app);
@@ -97,6 +103,8 @@ app.use('/api/auto-reply', autoReplyRoutes);
 console.log('✓ /api/auto-reply route registered');
 app.use('/api/super-admin', superAdminRoutes);
 console.log('✓ /api/super-admin route registered');
+app.use('/api/payment', paymentRoutes);
+console.log('✓ /api/payment route registered (webhook already registered above)');
 
 // 404 handler - must be after all routes
 // Note: Express 5 doesn't support wildcard '*' pattern in app.use()
@@ -115,6 +123,66 @@ const PORT = process.env.PORT || 5000;
 const server = app.listen(PORT, () => {
     console.log(`Server running on port ${PORT}`);
     console.log(`Environment: ${process.env.NODE_ENV || 'development'}`);
+});
+
+// Initialize WebSocket server
+const websocketService = require('./services/websocketService');
+const io = websocketService.initializeWebSocket(server);
+
+// WebSocket authentication middleware
+const jwt = require('jsonwebtoken');
+const User = require('./models/User');
+
+io.use(async (socket, next) => {
+    try {
+        const token = socket.handshake.auth.token || socket.handshake.headers.authorization?.split(' ')[1];
+        
+        if (!token) {
+            return next(new Error('Authentication error: No token provided'));
+        }
+
+        const decoded = jwt.verify(token, process.env.SESSION_SECRET);
+        const user = await User.findById(decoded.id).select('-__v');
+        
+        if (!user || !user.googleAccessToken) {
+            return next(new Error('Authentication error: User not found or invalid'));
+        }
+
+        socket.userId = user._id.toString();
+        socket.isSuperAdmin = user.role === 'super_admin';
+        socket.user = user;
+        
+        next();
+    } catch (error) {
+        console.error('WebSocket authentication error:', error.message);
+        next(new Error('Authentication error: Invalid token'));
+    }
+});
+
+// Handle WebSocket connections
+io.on('connection', (socket) => {
+    const userId = socket.userId;
+    const isSuperAdmin = socket.isSuperAdmin;
+
+    // Join user-specific room
+    socket.join(`user:${userId}`);
+    
+    // Join super admin room if applicable
+    if (isSuperAdmin) {
+        socket.join('super-admin');
+    }
+
+    console.log(`WebSocket client connected: ${userId} (Super Admin: ${isSuperAdmin})`);
+
+    // Handle disconnection
+    socket.on('disconnect', () => {
+        console.log(`WebSocket client disconnected: ${userId}`);
+    });
+
+    // Handle errors
+    socket.on('error', (error) => {
+        console.error(`WebSocket error for user ${userId}:`, error);
+    });
 });
 
 // Handle unhandled promise rejections

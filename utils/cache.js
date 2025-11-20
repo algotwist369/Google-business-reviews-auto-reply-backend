@@ -33,6 +33,14 @@ class Cache {
         this.cache.clear();
     }
 
+    deleteByPrefix(prefix) {
+        for (const key of this.cache.keys()) {
+            if (key.startsWith(prefix)) {
+                this.cache.delete(key);
+            }
+        }
+    }
+
     // Clean up expired entries periodically
     cleanup() {
         const now = Date.now();

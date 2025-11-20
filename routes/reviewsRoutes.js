@@ -2,7 +2,8 @@ const express = require('express');
 const {
     getReviews,
     getAllReviews,
-    replyToReview
+    replyToReview,
+    generateAiReply
 } = require('../controllers/reviewsController');
 const { verifyToken } = require('../middleware/auth');
 const {
@@ -34,6 +35,12 @@ router.post(
     '/reply',
     validateRequest(['reviewName', 'comment']),
     replyToReview
+);
+
+router.post(
+    '/ai-reply',
+    validateRequest(['reviewName', 'reviewText']),
+    generateAiReply
 );
 
 module.exports = router;

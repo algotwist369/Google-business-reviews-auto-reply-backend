@@ -3,6 +3,7 @@ const Review = require('../models/Review');
 const AutoReplyTask = require('../models/AutoReplyTask');
 const { AppError } = require('../utils/errorHandler');
 const asyncHandler = require('../utils/asyncHandler');
+const websocketService = require('../services/websocketService');
 
 /**
  * Get all businesses with pagination and filters
@@ -69,7 +70,7 @@ const getAllBusinesses = asyncHandler(async (req, res) => {
         })
     );
 
-    res.json({
+    const response = {
         success: true,
         data: usersWithStats,
         pagination: {
@@ -78,7 +79,16 @@ const getAllBusinesses = asyncHandler(async (req, res) => {
             total,
             pages: Math.ceil(total / limit)
         }
-    });
+    };
+
+    // Emit WebSocket event for super admins
+    try {
+        websocketService.emitToSuperAdmins('superAdmin:businesses:updated', response);
+    } catch (error) {
+        console.error('Failed to emit super admin businesses update:', error);
+    }
+
+    res.json(response);
 });
 
 /**
@@ -160,6 +170,18 @@ const enableTrial = asyncHandler(async (req, res) => {
 
     await user.save();
 
+    // Emit WebSocket event for super admins
+    try {
+        websocketService.emitToSuperAdmins('superAdmin:business:updated', {
+            businessId: businessId,
+            trial: user.trial
+        });
+        websocketService.emitToSuperAdmins('superAdmin:businesses:refresh', {});
+        websocketService.emitToSuperAdmins('superAdmin:stats:refresh', {});
+    } catch (error) {
+        console.error('Failed to emit super admin update:', error);
+    }
+
     res.json({
         success: true,
         message: `Trial enabled for ${days} days.`,
@@ -190,6 +212,18 @@ const disableTrial = asyncHandler(async (req, res) => {
     };
 
     await user.save();
+
+    // Emit WebSocket event for super admins
+    try {
+        websocketService.emitToSuperAdmins('superAdmin:business:updated', {
+            businessId: businessId,
+            trial: user.trial
+        });
+        websocketService.emitToSuperAdmins('superAdmin:businesses:refresh', {});
+        websocketService.emitToSuperAdmins('superAdmin:stats:refresh', {});
+    } catch (error) {
+        console.error('Failed to emit super admin update:', error);
+    }
 
     res.json({
         success: true,
@@ -225,6 +259,18 @@ const updateSubscription = asyncHandler(async (req, res) => {
     }
 
     await user.save();
+
+    // Emit WebSocket event for super admins
+    try {
+        websocketService.emitToSuperAdmins('superAdmin:business:updated', {
+            businessId: businessId,
+            subscription: user.subscription
+        });
+        websocketService.emitToSuperAdmins('superAdmin:businesses:refresh', {});
+        websocketService.emitToSuperAdmins('superAdmin:stats:refresh', {});
+    } catch (error) {
+        console.error('Failed to emit super admin update:', error);
+    }
 
     res.json({
         success: true,
@@ -269,7 +315,7 @@ const getDashboardStats = asyncHandler(async (req, res) => {
         { $group: { _id: '$trial.status', count: { $sum: 1 } } }
     ]);
 
-    res.json({
+    const response = {
         success: true,
         data: {
             overview: {
@@ -289,7 +335,16 @@ const getDashboardStats = asyncHandler(async (req, res) => {
                 return acc;
             }, {})
         }
-    });
+    };
+
+    // Emit WebSocket event for super admins
+    try {
+        websocketService.emitToSuperAdmins('superAdmin:stats:updated', response.data);
+    } catch (error) {
+        console.error('Failed to emit super admin stats update:', error);
+    }
+
+    res.json(response);
 });
 
 /**
@@ -310,6 +365,17 @@ const updateBusinessRole = asyncHandler(async (req, res) => {
 
     user.role = role;
     await user.save();
+
+    // Emit WebSocket event for super admins
+    try {
+        websocketService.emitToSuperAdmins('superAdmin:business:updated', {
+            businessId: businessId,
+            role: user.role
+        });
+        websocketService.emitToSuperAdmins('superAdmin:businesses:refresh', {});
+    } catch (error) {
+        console.error('Failed to emit super admin update:', error);
+    }
 
     res.json({
         success: true,

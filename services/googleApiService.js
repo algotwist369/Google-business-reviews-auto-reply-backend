@@ -2,8 +2,7 @@ const axios = require('axios');
 const { GOOGLE_API } = require('../utils/constants');
 
 /**
- * Google API Service
- * Handles all Google My Business API calls with proper error handling and retry logic
+ * Google API Service - Handles all Google My Business API calls with proper error handling and retry logic
  */
 class GoogleApiService {
     constructor() {
@@ -17,12 +16,6 @@ class GoogleApiService {
 
     /**
      * Make authenticated request to Google API
-     * @param {string} accessToken - OAuth access token
-     * @param {string} method - HTTP method
-     * @param {string} url - API URL
-     * @param {Object} data - Request data (for POST/PUT)
-     * @param {Object} params - Query parameters
-     * @returns {Promise} API response
      */
     async makeRequest(accessToken, method, url, data = null, params = {}) {
         try {
@@ -59,8 +52,6 @@ class GoogleApiService {
 
     /**
      * Get business accounts
-     * @param {string} accessToken - OAuth access token
-     * @returns {Promise<Object>} Account data
      */
     async getAccounts(accessToken) {
         return await this.makeRequest(
@@ -72,9 +63,6 @@ class GoogleApiService {
 
     /**
      * Get locations for an account
-     * @param {string} accessToken - OAuth access token
-     * @param {string} accountName - Account name (e.g., accounts/123456)
-     * @returns {Promise<Array>} Array of locations
      */
     async getLocations(accessToken, accountName) {
         const url = `${GOOGLE_API.LOCATIONS_URL}/${accountName}/locations`;
@@ -90,19 +78,20 @@ class GoogleApiService {
 
     /**
      * Fetch all reviews for a location with pagination
-     * @param {string} accessToken - OAuth access token
-     * @param {string} accountName - Account name
-     * @param {string} locationName - Location name
-     * @returns {Promise<Array>} Array of reviews
      */
-    async getAllReviews(accessToken, accountName, locationName) {
+    async getAllReviews(accessToken, accountName, locationName, options = {}) {
         const reviewUrl = `${GOOGLE_API.REVIEWS_URL}/${accountName}/${locationName}/reviews`;
         const allReviews = [];
         let nextPageToken = null;
+        const sinceTimestamp = options.since ? new Date(options.since).getTime() : null;
+        let stopPaging = false;
 
         try {
             do {
-                const params = { pageSize: GOOGLE_API.MAX_PAGE_SIZE };
+                const params = {
+                    pageSize: GOOGLE_API.MAX_PAGE_SIZE,
+                    orderBy: 'updateTime desc'
+                };
                 if (nextPageToken) {
                     params.pageToken = nextPageToken;
                 }
@@ -115,11 +104,23 @@ class GoogleApiService {
                     params
                 );
 
-                if (response.reviews) {
-                    allReviews.push(...response.reviews);
+                const pageReviews = response.reviews || [];
+                if (sinceTimestamp) {
+                    const filtered = [];
+                    for (const review of pageReviews) {
+                        const updatedAt = new Date(review.updateTime || review.createTime || 0).getTime();
+                        if (updatedAt >= sinceTimestamp) {
+                            filtered.push(review);
+                        } else {
+                            stopPaging = true;
+                        }
+                    }
+                    allReviews.push(...filtered);
+                } else {
+                    allReviews.push(...pageReviews);
                 }
 
-                nextPageToken = response.nextPageToken;
+                nextPageToken = stopPaging ? null : response.nextPageToken;
             } while (nextPageToken);
 
             return allReviews;
@@ -132,12 +133,8 @@ class GoogleApiService {
 
     /**
      * Batch fetch reviews for multiple locations concurrently
-     * @param {string} accessToken - OAuth access token
-     * @param {string} accountName - Account name
-     * @param {Array} locations - Array of location objects
-     * @returns {Promise<Array>} Array of location data with reviews
      */
-    async batchFetchReviews(accessToken, accountName, locations) {
+    async batchFetchReviews(accessToken, accountName, locations, options = {}) {
         // Process locations in batches to avoid overwhelming the API
         const batchSize = GOOGLE_API.MAX_CONCURRENT_REQUESTS;
         const results = [];
@@ -149,7 +146,8 @@ class GoogleApiService {
                     const reviews = await this.getAllReviews(
                         accessToken,
                         accountName,
-                        location.name
+                        location.name,
+                        options
                     );
                     return {
                         locationName: location.title,
@@ -177,10 +175,6 @@ class GoogleApiService {
 
     /**
      * Reply to a review
-     * @param {string} accessToken - OAuth access token
-     * @param {string} reviewName - Review name (full path)
-     * @param {string} comment - Reply comment
-     * @returns {Promise<Object>} Response data
      */
     async replyToReview(accessToken, reviewName, comment) {
         const url = `${GOOGLE_API.REVIEWS_URL}/${reviewName}/reply`;
