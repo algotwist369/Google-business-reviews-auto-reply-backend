@@ -50,7 +50,7 @@ class AutoReplyService {
     }
 
     async triggerManualRun(userId) {
-        const user = await User.findById(userId);
+        const user = await User.findById(userId).select('_id name googleAccessToken autoReplySettings');
         if (!user) {
             throw new Error('User not found');
         }
@@ -70,7 +70,8 @@ class AutoReplyService {
         this.isRunning = true;
 
         try {
-            const users = await User.find({ 'autoReplySettings.enabled': true });
+            const users = await User.find({ 'autoReplySettings.enabled': true })
+                .select('_id name googleAccessToken autoReplySettings');
             for (const user of users) {
                 await this.runForUser(user, { reason });
             }
@@ -325,7 +326,9 @@ class AutoReplyService {
             status: 'detected'
         })
             .sort({ createdAt: 1 })
-            .limit(MAX_GENERATIONS_PER_CYCLE);
+            .limit(MAX_GENERATIONS_PER_CYCLE)
+            .select('_id locationName reviewerName ratingValue comment sentiment tone customerName generatedReply')
+            .lean();
 
         for (const task of tasks) {
             try {
@@ -401,7 +404,9 @@ class AutoReplyService {
             scheduledFor: { $lte: now }
         })
             .sort({ scheduledFor: 1 })
-            .limit(MAX_DISPATCH_PER_CYCLE);
+            .limit(MAX_DISPATCH_PER_CYCLE)
+            .select('_id reviewName generatedReply scheduledFor')
+            .lean();
 
         for (const task of tasks) {
             try {
@@ -463,22 +468,26 @@ class AutoReplyService {
     }
 
     async getStatsForUser(userId) {
-        const pipeline = [
+        const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+        const [stats] = await AutoReplyTask.aggregate([
             { $match: { userId } },
-            { $group: { _id: '$status', total: { $sum: 1 } } }
-        ];
-        const aggregates = await AutoReplyTask.aggregate(pipeline);
-        const totals = aggregates.reduce((acc, item) => {
+            {
+                $facet: {
+                    totals: [{ $group: { _id: '$status', total: { $sum: 1 } } }],
+                    sentWindow: [
+                        { $match: { status: 'sent', sentAt: { $gte: sevenDaysAgo } } },
+                        { $count: 'count' }
+                    ]
+                }
+            }
+        ]);
+
+        const totals = (stats?.totals || []).reduce((acc, item) => {
             acc[item._id] = item.total;
             return acc;
         }, {});
 
-        const sentLast7d = await AutoReplyTask.countDocuments({
-            userId,
-            status: 'sent',
-            sentAt: { $gte: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000) }
-        });
-
+        const sentLast7d = stats?.sentWindow?.[0]?.count || 0;
         const sentAllTime = totals.sent || 0;
         const failedTotal = (totals.generation_failed || 0) + (totals.delivery_failed || 0);
 

@@ -47,6 +47,8 @@ const AutoReplyTaskSchema = new mongoose.Schema(
 );
 
 AutoReplyTaskSchema.index({ userId: 1, reviewName: 1 }, { unique: true });
+AutoReplyTaskSchema.index({ userId: 1, status: 1, createdAt: -1 });
+AutoReplyTaskSchema.index({ userId: 1, status: 1, scheduledFor: 1 });
 
 module.exports = mongoose.model('AutoReplyTask', AutoReplyTaskSchema);
 

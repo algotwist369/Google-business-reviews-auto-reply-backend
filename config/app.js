@@ -7,6 +7,7 @@ const rateLimit = require('express-rate-limit');
 const morgan = require('morgan');
 const fs = require('fs');
 const path = require('path');
+const mongoSanitize = require('express-mongo-sanitize');
 
 const configureApp = (app) => {
     const isProduction = process.env.NODE_ENV === 'production';
@@ -62,6 +63,9 @@ const configureApp = (app) => {
     // Body parser middleware
     app.use(express.json({ limit: '10mb' }));
     app.use(express.urlencoded({ extended: true, limit: '10mb' }));
+
+    // Sanitize payloads to prevent NoSQL injection
+    app.use(mongoSanitize({ replaceWith: '_' }));
 
     // Request logging middleware (optional, for debugging)
     if (process.env.NODE_ENV === 'development') {

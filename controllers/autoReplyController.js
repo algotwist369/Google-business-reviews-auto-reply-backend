@@ -195,7 +195,7 @@ const runAutoReplyNow = asyncHandler(async (req, res) => {
 
 const retryAutoReplyTask = asyncHandler(async (req, res) => {
     const { taskId } = req.params;
-    const task = await AutoReplyTask.findOne({ _id: taskId, userId: req.user._id });
+    const task = await AutoReplyTask.findOne({ _id: taskId, userId: req.user._id }).lean();
 
     if (!task) {
         throw new AppError('Task not found', 404);

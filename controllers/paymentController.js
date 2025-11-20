@@ -291,21 +291,26 @@ const getSubscriptionStatus = asyncHandler(async (req, res) => {
     const user = await User.findById(req.user._id).select('subscription trial');
 
     // Check if trial is expired
+    let shouldPersist = false;
+
     if (user.trial.status === 'active' && user.trial.endDate && new Date() > user.trial.endDate) {
         user.trial.status = 'expired';
         if (user.subscription.plan === 'trial') {
             user.subscription.plan = 'free';
             user.subscription.status = 'expired';
         }
-        await user.save();
+        shouldPersist = true;
     }
 
-    // Check if subscription is expired
     if (user.subscription.expiresAt && new Date() > user.subscription.expiresAt && user.subscription.status === 'active') {
         user.subscription.status = 'expired';
         if (user.subscription.plan !== 'free') {
             user.subscription.plan = 'free';
         }
+        shouldPersist = true;
+    }
+
+    if (shouldPersist) {
         await user.save();
     }
 

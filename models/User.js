@@ -88,7 +88,10 @@ const UserSchema = new mongoose.Schema({
 // Note: googleId index is automatically created by unique: true, so we don't need to define it again
 UserSchema.index({ email: 1 });
 UserSchema.index({ role: 1 });
+UserSchema.index({ createdAt: -1 });
 UserSchema.index({ 'trial.status': 1 });
 UserSchema.index({ 'subscription.status': 1 });
+UserSchema.index({ 'autoReplySettings.enabled': 1 });
+UserSchema.index({ 'subscription.pendingOrder.orderId': 1 }, { sparse: true });
 
 module.exports = mongoose.model('User', UserSchema);

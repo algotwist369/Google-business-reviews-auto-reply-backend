@@ -106,7 +106,17 @@ const getBusinessDetails = asyncHandler(async (req, res) => {
     }
 
     // Get detailed stats
-    const [reviews, tasks, stats] = await Promise.all([
+    const [
+        reviews,
+        tasks,
+        [
+            totalReviews,
+            totalTasks,
+            sentReplies,
+            pendingTasks,
+            failedTasks
+        ]
+    ] = await Promise.all([
         Review.find({ userId: businessId })
             .sort({ createTime: -1 })
             .limit(10)
@@ -115,13 +125,19 @@ const getBusinessDetails = asyncHandler(async (req, res) => {
             .sort({ createdAt: -1 })
             .limit(10)
             .lean(),
-        {
-            totalReviews: await Review.countDocuments({ userId: businessId }),
-            totalTasks: await AutoReplyTask.countDocuments({ userId: businessId }),
-            sentReplies: await AutoReplyTask.countDocuments({ userId: businessId, status: 'sent' }),
-            pendingTasks: await AutoReplyTask.countDocuments({ userId: businessId, status: { $in: ['detected', 'scheduled'] } }),
-            failedTasks: await AutoReplyTask.countDocuments({ userId: businessId, status: { $in: ['generation_failed', 'delivery_failed'] } })
-        }
+        Promise.all([
+            Review.countDocuments({ userId: businessId }),
+            AutoReplyTask.countDocuments({ userId: businessId }),
+            AutoReplyTask.countDocuments({ userId: businessId, status: 'sent' }),
+            AutoReplyTask.countDocuments({
+                userId: businessId,
+                status: { $in: ['detected', 'scheduled'] }
+            }),
+            AutoReplyTask.countDocuments({
+                userId: businessId,
+                status: { $in: ['generation_failed', 'delivery_failed'] }
+            })
+        ])
     ]);
 
     res.json({
@@ -130,7 +146,13 @@ const getBusinessDetails = asyncHandler(async (req, res) => {
             ...user,
             reviews,
             tasks,
-            stats
+            stats: {
+                totalReviews,
+                totalTasks,
+                sentReplies,
+                pendingTasks,
+                failedTasks
+            }
         }
     });
 });
@@ -303,16 +325,15 @@ const getDashboardStats = asyncHandler(async (req, res) => {
         })
     ]);
 
-    // Get businesses by subscription status
-    const businessesByStatus = await User.aggregate([
-        { $match: { role: 'user' } },
-        { $group: { _id: '$subscription.status', count: { $sum: 1 } } }
-    ]);
-
-    // Get businesses by trial status
-    const businessesByTrial = await User.aggregate([
-        { $match: { role: 'user' } },
-        { $group: { _id: '$trial.status', count: { $sum: 1 } } }
+    const [businessesByStatus, businessesByTrial] = await Promise.all([
+        User.aggregate([
+            { $match: { role: 'user' } },
+            { $group: { _id: '$subscription.status', count: { $sum: 1 } } }
+        ]),
+        User.aggregate([
+            { $match: { role: 'user' } },
+            { $group: { _id: '$trial.status', count: { $sum: 1 } } }
+        ])
     ]);
 
     const response = {

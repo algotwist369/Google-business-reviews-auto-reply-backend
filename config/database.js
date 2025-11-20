@@ -3,12 +3,20 @@ require('dotenv').config();
 
 const connectDB = async () => {
     try {
+        const maxPoolSize = Number(process.env.MONGO_MAX_POOL_SIZE || 50);
+        const minPoolSize = Number(process.env.MONGO_MIN_POOL_SIZE || Math.max(1, Math.floor(maxPoolSize / 5)));
+
         const options = {
-            maxPoolSize: 10, // Maintain up to 10 socket connections
-            serverSelectionTimeoutMS: 5000, // Keep trying to send operations for 5 seconds
-            socketTimeoutMS: 45000, // Close sockets after 45 seconds of inactivity
-            // bufferMaxEntries: 0, // Disable mongoose buffering
-            bufferCommands: false, // Disable mongoose buffering
+            maxPoolSize,
+            minPoolSize,
+            maxIdleTimeMS: Number(process.env.MONGO_MAX_IDLE_MS || 30000),
+            serverSelectionTimeoutMS: Number(process.env.MONGO_SERVER_SELECTION_TIMEOUT_MS || 5000),
+            socketTimeoutMS: Number(process.env.MONGO_SOCKET_TIMEOUT_MS || 45000),
+            heartbeatFrequencyMS: Number(process.env.MONGO_HEARTBEAT_MS || 10000),
+            retryWrites: true,
+            retryReads: true,
+            family: 4,
+            bufferCommands: false // Disable mongoose buffering
         };
 
         const conn = await mongoose.connect(

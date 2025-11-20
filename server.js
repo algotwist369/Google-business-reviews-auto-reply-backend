@@ -2,6 +2,8 @@ require('dotenv').config();
 const express = require('express');
 const passport = require('passport');
 const mongoose = require('mongoose');
+const cluster = require('node:cluster');
+const os = require('node:os');
 
 // Import configurations
 const connectDB = require('./config/database');
@@ -10,6 +12,9 @@ const configureApp = require('./config/app');
 const validateEnv = require('./config/validateEnv');
 const { errorHandler } = require('./utils/errorHandler');
 const autoReplyService = require('./services/autoReplyService');
+
+const shouldUseCluster = process.env.USE_CLUSTER === 'true' && process.env.NODE_ENV !== 'test';
+const requestedWorkers = Math.max(1, Number(process.env.CLUSTER_WORKERS) || os.cpus().length);
 
 // Import routes
 console.log('Loading routes...');
@@ -42,14 +47,6 @@ configureApp(app);
 // Initialize Passport
 app.use(passport.initialize());
 configurePassport();
-
-// Connect to MongoDB
-const dbPromise = connectDB();
-dbPromise
-    .then(() => autoReplyService.start())
-    .catch((error) => {
-        console.error('Failed to start auto-reply service:', error.message);
-    });
 
 // Health check endpoint (before routes for better performance)
 // Returns 200 if healthy, 503 if unhealthy (for load balancer/proxy health checks)
@@ -118,86 +115,133 @@ app.use((req, res, next) => {
 // Global error handler (must be last)
 app.use(errorHandler);
 
-// Start server
-const PORT = process.env.PORT || 5000;
-const server = app.listen(PORT, () => {
-    console.log(`Server running on port ${PORT}`);
-    console.log(`Environment: ${process.env.NODE_ENV || 'development'}`);
-});
+const startServer = () => {
+    const dbPromise = connectDB();
+    const shouldStartAutoReplyService = !shouldUseCluster || process.env.AUTO_REPLY_PRIMARY === 'true';
 
-// Initialize WebSocket server
-const websocketService = require('./services/websocketService');
-const io = websocketService.initializeWebSocket(server);
-
-// WebSocket authentication middleware
-const jwt = require('jsonwebtoken');
-const User = require('./models/User');
-
-io.use(async (socket, next) => {
-    try {
-        const token = socket.handshake.auth.token || socket.handshake.headers.authorization?.split(' ')[1];
-        
-        if (!token) {
-            return next(new Error('Authentication error: No token provided'));
-        }
-
-        const decoded = jwt.verify(token, process.env.SESSION_SECRET);
-        const user = await User.findById(decoded.id).select('-__v');
-        
-        if (!user || !user.googleAccessToken) {
-            return next(new Error('Authentication error: User not found or invalid'));
-        }
-
-        socket.userId = user._id.toString();
-        socket.isSuperAdmin = user.role === 'super_admin';
-        socket.user = user;
-        
-        next();
-    } catch (error) {
-        console.error('WebSocket authentication error:', error.message);
-        next(new Error('Authentication error: Invalid token'));
-    }
-});
-
-// Handle WebSocket connections
-io.on('connection', (socket) => {
-    const userId = socket.userId;
-    const isSuperAdmin = socket.isSuperAdmin;
-
-    // Join user-specific room
-    socket.join(`user:${userId}`);
-    
-    // Join super admin room if applicable
-    if (isSuperAdmin) {
-        socket.join('super-admin');
+    if (shouldStartAutoReplyService) {
+        dbPromise
+            .then(() => autoReplyService.start())
+            .catch((error) => {
+                console.error('Failed to start auto-reply service:', error.message);
+            });
     }
 
-    console.log(`WebSocket client connected: ${userId} (Super Admin: ${isSuperAdmin})`);
-
-    // Handle disconnection
-    socket.on('disconnect', () => {
-        console.log(`WebSocket client disconnected: ${userId}`);
+    const PORT = process.env.PORT || 5000;
+    const server = app.listen(PORT, () => {
+        console.log(`Server running on port ${PORT}`);
+        console.log(`Environment: ${process.env.NODE_ENV || 'development'}`);
+        if (shouldUseCluster) {
+            console.log(`Worker PID ${process.pid} online${process.env.AUTO_REPLY_PRIMARY === 'true' ? ' (auto-reply dispatcher)' : ''}`);
+        }
     });
 
-    // Handle errors
-    socket.on('error', (error) => {
-        console.error(`WebSocket error for user ${userId}:`, error);
-    });
-});
+    const websocketService = require('./services/websocketService');
+    const io = websocketService.initializeWebSocket(server);
 
-// Handle unhandled promise rejections
-process.on('unhandledRejection', (err) => {
-    console.error('Unhandled Promise Rejection:', err);
-    // Close server & exit process
-    server.close(() => {
-        process.exit(1);
-    });
-});
+    const jwt = require('jsonwebtoken');
+    const User = require('./models/User');
 
-// Handle uncaught exceptions
-process.on('uncaughtException', (err) => {
-    console.error('Uncaught Exception:', err);
-    process.exit(1);
-});
+    io.use(async (socket, next) => {
+        try {
+            const token = socket.handshake.auth.token || socket.handshake.headers.authorization?.split(' ')[1];
+
+            if (!token) {
+                return next(new Error('Authentication error: No token provided'));
+            }
+
+            const decoded = jwt.verify(token, process.env.SESSION_SECRET);
+            const user = await User.findById(decoded.id).select('-__v').lean();
+
+            if (!user || !user.googleAccessToken) {
+                return next(new Error('Authentication error: User not found or invalid'));
+            }
+
+            socket.userId = user._id.toString();
+            socket.isSuperAdmin = user.role === 'super_admin';
+            socket.user = user;
+
+            next();
+        } catch (error) {
+            console.error('WebSocket authentication error:', error.message);
+            next(new Error('Authentication error: Invalid token'));
+        }
+    });
+
+    io.on('connection', (socket) => {
+        const userId = socket.userId;
+        const isSuperAdmin = socket.isSuperAdmin;
+
+        socket.join(`user:${userId}`);
+
+        if (isSuperAdmin) {
+            socket.join('super-admin');
+        }
+
+        console.log(`WebSocket client connected: ${userId} (Super Admin: ${isSuperAdmin})`);
+
+        socket.on('disconnect', () => {
+            console.log(`WebSocket client disconnected: ${userId}`);
+        });
+
+        socket.on('error', (error) => {
+            console.error(`WebSocket error for user ${userId}:`, error);
+        });
+    });
+
+    const gracefulShutdown = () => {
+        if (!server.listening) {
+            return process.exit(1);
+        }
+        server.close(() => {
+            process.exit(1);
+        });
+    };
+
+    process.on('unhandledRejection', (err) => {
+        console.error('Unhandled Promise Rejection:', err);
+        gracefulShutdown();
+    });
+
+    process.on('uncaughtException', (err) => {
+        console.error('Uncaught Exception:', err);
+        gracefulShutdown();
+    });
+
+    return server;
+};
+
+const bootstrapCluster = () => {
+    if (shouldUseCluster && cluster.isPrimary) {
+        console.log(`Primary PID ${process.pid} starting ${requestedWorkers} workers...`);
+
+        let autoReplyAssigned = false;
+        const forkWorker = (assignAutoReply) => {
+            const env = { ...process.env, AUTO_REPLY_PRIMARY: assignAutoReply ? 'true' : 'false' };
+            const worker = cluster.fork(env);
+            worker.isAutoReplyPrimary = assignAutoReply;
+            return worker;
+        };
+
+        for (let i = 0; i < requestedWorkers; i += 1) {
+            const worker = forkWorker(!autoReplyAssigned);
+            if (!autoReplyAssigned && worker.isAutoReplyPrimary) {
+                autoReplyAssigned = true;
+            }
+        }
+
+        cluster.on('exit', (worker) => {
+            console.warn(`Worker PID ${worker.process.pid} exited. Restarting...`);
+            forkWorker(worker.isAutoReplyPrimary);
+        });
+    } else {
+        if (!process.env.AUTO_REPLY_PRIMARY) {
+            process.env.AUTO_REPLY_PRIMARY = 'true';
+        }
+        startServer();
+    }
+};
+
+bootstrapCluster();
 
 module.exports = app;

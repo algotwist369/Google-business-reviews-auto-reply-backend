@@ -6,12 +6,9 @@ const {
     generateAiReply
 } = require('../controllers/reviewsController');
 const { verifyToken } = require('../middleware/auth');
-const {
-    validateRequest,
-    validatePagination,
-    validateFilter,
-    validateSort
-} = require('../middleware/validator');
+const { validatePagination, validateFilter, validateSort } = require('../middleware/validator');
+const { validateBody } = require('../middleware/schemaValidator');
+const { reviewSchemas } = require('../validators');
 
 const router = express.Router();
 
@@ -31,17 +28,9 @@ router.get(
 router.get('/all', getAllReviews);
 
 // Reply to a review
-router.post(
-    '/reply',
-    validateRequest(['reviewName', 'comment']),
-    replyToReview
-);
+router.post('/reply', validateBody(reviewSchemas.replyBody), replyToReview);
 
-router.post(
-    '/ai-reply',
-    validateRequest(['reviewName', 'reviewText']),
-    generateAiReply
-);
+router.post('/ai-reply', validateBody(reviewSchemas.aiReplyBody), generateAiReply);
 
 module.exports = router;
 
