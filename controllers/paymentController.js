@@ -43,11 +43,19 @@ const createCheckoutSession = asyncHandler(async (req, res) => {
 
     // Free plan doesn't need payment
     if (normalizedPlan === 'free') {
+        if (user.subscription?.freeSwitchUsed) {
+            throw new AppError('Free plan is no longer available for your account.', 403);
+        }
+
         user.subscription.plan = 'free';
         user.subscription.status = 'active';
         user.subscription.expiresAt = null;
         user.subscription.paymentProvider = 'none';
         user.subscription.pendingOrder = undefined;
+        if (!user.subscription.freeSwitchUsed) {
+            user.subscription.freeSwitchUsed = true;
+            user.subscription.freeSwitchUsedAt = new Date();
+        }
         await user.save();
 
         return res.json({
@@ -298,6 +306,10 @@ const getSubscriptionStatus = asyncHandler(async (req, res) => {
         if (user.subscription.plan === 'trial') {
             user.subscription.plan = 'free';
             user.subscription.status = 'expired';
+            if (!user.subscription.freeSwitchUsed) {
+                user.subscription.freeSwitchUsed = true;
+                user.subscription.freeSwitchUsedAt = new Date();
+            }
         }
         shouldPersist = true;
     }
@@ -306,6 +318,10 @@ const getSubscriptionStatus = asyncHandler(async (req, res) => {
         user.subscription.status = 'expired';
         if (user.subscription.plan !== 'free') {
             user.subscription.plan = 'free';
+            if (!user.subscription.freeSwitchUsed) {
+                user.subscription.freeSwitchUsed = true;
+                user.subscription.freeSwitchUsedAt = new Date();
+            }
         }
         shouldPersist = true;
     }
@@ -337,12 +353,20 @@ const cancelSubscription = asyncHandler(async (req, res) => {
         throw new AppError('No active paid subscription to cancel.', 400);
     }
 
+    if (user.subscription.freeSwitchUsed) {
+        throw new AppError('Free plan has already been redeemed for this account.', 403);
+    }
+
     user.subscription.plan = 'free';
     user.subscription.status = 'cancelled';
     user.subscription.expiresAt = null;
     user.subscription.razorpayOrderId = null;
     user.subscription.razorpayPaymentId = null;
     user.subscription.pendingOrder = undefined;
+    if (!user.subscription.freeSwitchUsed) {
+        user.subscription.freeSwitchUsed = true;
+        user.subscription.freeSwitchUsedAt = new Date();
+    }
     await user.save();
 
     res.json({

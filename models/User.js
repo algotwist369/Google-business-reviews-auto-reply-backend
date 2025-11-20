@@ -42,6 +42,8 @@ const UserSchema = new mongoose.Schema({
             enum: ['active', 'cancelled', 'expired', 'suspended'],
             default: 'active'
         },
+        freeSwitchUsed: { type: Boolean, default: false },
+        freeSwitchUsedAt: { type: Date },
         expiresAt: { type: Date },
         paymentProvider: { type: String, enum: ['razorpay', 'manual', 'none'], default: 'none' },
         razorpayCustomerId: { type: String },
@@ -58,7 +60,7 @@ const UserSchema = new mongoose.Schema({
 
     autoReplySettings: {
         enabled: { type: Boolean, default: false },
-        delayMinutes: { type: Number, default: 5 },
+        delayMinutes: { type: Number, default: 3 },
         tone: {
             type: String,
             enum: ['friendly', 'empathetic', 'professional', 'concise'],

@@ -20,10 +20,10 @@ const configurePassport = () => {
             let user = await User.findOne({ googleId: profile.id });
 
             if (!user) {
-                // New user - set up 5-day free trial
+                // New user - set up 3-day free trial
                 const startDate = new Date();
                 const endDate = new Date();
-                endDate.setDate(endDate.getDate() + 5); // 5-day trial
+                endDate.setDate(endDate.getDate() + 3); // 3-day trial
 
                 user = new User({
                     googleId: profile.id,
@@ -36,7 +36,7 @@ const configurePassport = () => {
                         enabled: true,
                         startDate: startDate,
                         endDate: endDate,
-                        days: 5,
+                        days: 3,
                         status: 'active'
                     },
                     subscription: {

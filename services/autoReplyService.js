@@ -144,13 +144,13 @@ class AutoReplyService {
 
     async fetchReviews(user) {
         try {
-            const accountResponse = await googleApiService.getAccounts(user.googleAccessToken);
+            const accountResponse = await googleApiService.getAccounts(user.googleAccessToken, user);
             const account = accountResponse.accounts?.[0];
             if (!account) {
                 return { account: null, locationsWithReviews: [], latestReviewTime: null };
             }
 
-            const locations = await googleApiService.getLocations(user.googleAccessToken, account.name);
+            const locations = await googleApiService.getLocations(user.googleAccessToken, account.name, user);
             if (!locations.length) {
                 return { account, locationsWithReviews: [], latestReviewTime: null };
             }
@@ -167,7 +167,8 @@ class AutoReplyService {
                 user.googleAccessToken,
                 account.name,
                 locations,
-                since ? { since } : {}
+                since ? { since } : {},
+                user
             );
 
             let latestReviewTime = lastSync ? lastSync.getTime() : 0;
@@ -417,7 +418,8 @@ class AutoReplyService {
                 await googleApiService.replyToReview(
                     user.googleAccessToken,
                     task.reviewName,
-                    task.generatedReply
+                    task.generatedReply,
+                    user
                 );
 
                 await AutoReplyTask.findByIdAndUpdate(task._id, {

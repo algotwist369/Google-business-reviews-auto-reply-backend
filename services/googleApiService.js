@@ -1,5 +1,6 @@
 const axios = require('axios');
 const { GOOGLE_API } = require('../utils/constants');
+const tokenRefreshService = require('./tokenRefreshService');
 
 /**
  * Google API Service - Handles all Google My Business API calls with proper error handling and retry logic
@@ -15,9 +16,10 @@ class GoogleApiService {
     }
 
     /**
-     * Make authenticated request to Google API
+     * Make authenticated request to Google API with automatic token refresh on 401
+     
      */
-    async makeRequest(accessToken, method, url, data = null, params = {}) {
+    async makeRequest(accessToken, method, url, data = null, params = {}, userOrId = null, retried = false) {
         try {
             const config = {
                 method,
@@ -35,6 +37,22 @@ class GoogleApiService {
             const response = await this.axiosInstance(config);
             return response.data;
         } catch (error) {
+            // If we get a 401 and have a user/userId, try to refresh the token
+            if (error.response?.status === 401 && userOrId && !retried) {
+                try {
+                    const userId = typeof userOrId === 'string' ? userOrId : userOrId._id?.toString();
+                    if (userId) {
+                        console.log(`Attempting to refresh token for user ${userId} after 401 error`);
+                        const newAccessToken = await tokenRefreshService.refreshAndSaveUserToken(userId);
+                        // Retry the request with the new token
+                        return this.makeRequest(newAccessToken, method, url, data, params, userOrId, true);
+                    }
+                } catch (refreshError) {
+                    console.error(`Token refresh failed for user ${userOrId}:`, refreshError.message);
+                    // If refresh fails, throw the original 401 error
+                }
+            }
+
             if (error.response) {
                 // API responded with error status
                 throw new Error(
@@ -52,34 +70,48 @@ class GoogleApiService {
 
     /**
      * Get business accounts
+     * @param {string} accessToken - Access token
+     * @param {string|object} userOrId - User ID or User object (optional, for token refresh)
      */
-    async getAccounts(accessToken) {
+    async getAccounts(accessToken, userOrId = null) {
         return await this.makeRequest(
             accessToken,
             'GET',
-            GOOGLE_API.ACCOUNTS_URL
+            GOOGLE_API.ACCOUNTS_URL,
+            null,
+            {},
+            userOrId
         );
     }
 
     /**
      * Get locations for an account
+     * @param {string} accessToken - Access token
+     * @param {string} accountName - Account name
+     * @param {string|object} userOrId - User ID or User object (optional, for token refresh)
      */
-    async getLocations(accessToken, accountName) {
+    async getLocations(accessToken, accountName, userOrId = null) {
         const url = `${GOOGLE_API.LOCATIONS_URL}/${accountName}/locations`;
         const response = await this.makeRequest(
             accessToken,
             'GET',
             url,
             null,
-            { readMask: 'name,title' }
+            { readMask: 'name,title' },
+            userOrId
         );
         return response.locations || [];
     }
 
     /**
      * Fetch all reviews for a location with pagination
+     * @param {string} accessToken - Access token
+     * @param {string} accountName - Account name
+     * @param {string} locationName - Location name
+     * @param {object} options - Options including since timestamp
+     * @param {string|object} userOrId - User ID or User object (optional, for token refresh)
      */
-    async getAllReviews(accessToken, accountName, locationName, options = {}) {
+    async getAllReviews(accessToken, accountName, locationName, options = {}, userOrId = null) {
         const reviewUrl = `${GOOGLE_API.REVIEWS_URL}/${accountName}/${locationName}/reviews`;
         const allReviews = [];
         let nextPageToken = null;
@@ -101,7 +133,8 @@ class GoogleApiService {
                     'GET',
                     reviewUrl,
                     null,
-                    params
+                    params,
+                    userOrId
                 );
 
                 const pageReviews = response.reviews || [];
@@ -133,8 +166,13 @@ class GoogleApiService {
 
     /**
      * Batch fetch reviews for multiple locations concurrently
+     * @param {string} accessToken - Access token
+     * @param {string} accountName - Account name
+     * @param {array} locations - Array of location objects
+     * @param {object} options - Options including since timestamp
+     * @param {string|object} userOrId - User ID or User object (optional, for token refresh)
      */
-    async batchFetchReviews(accessToken, accountName, locations, options = {}) {
+    async batchFetchReviews(accessToken, accountName, locations, options = {}, userOrId = null) {
         // Process locations in batches to avoid overwhelming the API
         const batchSize = GOOGLE_API.MAX_CONCURRENT_REQUESTS;
         const results = [];
@@ -147,7 +185,8 @@ class GoogleApiService {
                         accessToken,
                         accountName,
                         location.name,
-                        options
+                        options,
+                        userOrId
                     );
                     return {
                         locationName: location.title,
@@ -175,14 +214,20 @@ class GoogleApiService {
 
     /**
      * Reply to a review
+     * @param {string} accessToken - Access token
+     * @param {string} reviewName - Review name/ID
+     * @param {string} comment - Reply comment
+     * @param {string|object} userOrId - User ID or User object (optional, for token refresh)
      */
-    async replyToReview(accessToken, reviewName, comment) {
+    async replyToReview(accessToken, reviewName, comment, userOrId = null) {
         const url = `${GOOGLE_API.REVIEWS_URL}/${reviewName}/reply`;
         return await this.makeRequest(
             accessToken,
             'PUT',
             url,
-            { comment }
+            { comment },
+            {},
+            userOrId
         );
     }
 }

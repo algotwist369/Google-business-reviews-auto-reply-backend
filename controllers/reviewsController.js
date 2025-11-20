@@ -39,7 +39,7 @@ const getReviews = asyncHandler(async (req, res) => {
 
     try {
         // Fetch from Google API
-        const accountRes = await googleApiService.getAccounts(user.googleAccessToken);
+        const accountRes = await googleApiService.getAccounts(user.googleAccessToken, user);
         const account = accountRes.accounts?.[0];
 
         if (!account) {
@@ -49,7 +49,8 @@ const getReviews = asyncHandler(async (req, res) => {
         // Get locations
         const locations = await googleApiService.getLocations(
             user.googleAccessToken,
-            account.name
+            account.name,
+            user
         );
 
         // Filter by location if specified
@@ -65,7 +66,9 @@ const getReviews = asyncHandler(async (req, res) => {
         const locationsWithReviews = await googleApiService.batchFetchReviews(
             user.googleAccessToken,
             account.name,
-            targetLocations
+            targetLocations,
+            {},
+            user
         );
 
         // Process all reviews for filtering and sorting
@@ -200,7 +203,7 @@ const getAllReviews = asyncHandler(async (req, res) => {
 
     try {
         // Fetch from Google API
-        const accountRes = await googleApiService.getAccounts(user.googleAccessToken);
+        const accountRes = await googleApiService.getAccounts(user.googleAccessToken, user);
         const account = accountRes.accounts?.[0];
 
         if (!account) {
@@ -210,14 +213,17 @@ const getAllReviews = asyncHandler(async (req, res) => {
         // Get locations
         const locations = await googleApiService.getLocations(
             user.googleAccessToken,
-            account.name
+            account.name,
+            user
         );
 
         // Batch fetch reviews
         const data = await googleApiService.batchFetchReviews(
             user.googleAccessToken,
             account.name,
-            locations
+            locations,
+            {},
+            user
         );
 
         // Cache the response
@@ -261,7 +267,8 @@ const replyToReview = asyncHandler(async (req, res) => {
         await googleApiService.replyToReview(
             user.googleAccessToken,
             reviewName,
-            comment
+            comment,
+            user
         );
 
         await AutoReplyTask.updateOne(
