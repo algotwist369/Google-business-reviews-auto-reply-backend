@@ -64,8 +64,20 @@ const configureApp = (app) => {
     app.use(express.json({ limit: '10mb' }));
     app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
-    // Sanitize payloads to prevent NoSQL injection
-    app.use(mongoSanitize({ replaceWith: '_' }));
+    // Sanitize payloads to prevent NoSQL injection without clobbering Express 5 getters
+    const sanitizeOptions = { replaceWith: '_' };
+    app.use((req, res, next) => {
+        if (req.body) {
+            mongoSanitize.sanitize(req.body, sanitizeOptions);
+        }
+        if (req.params) {
+            mongoSanitize.sanitize(req.params, sanitizeOptions);
+        }
+        if (req.query) {
+            mongoSanitize.sanitize(req.query, sanitizeOptions);
+        }
+        next();
+    });
 
     // Request logging middleware (optional, for debugging)
     if (process.env.NODE_ENV === 'development') {

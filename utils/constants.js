@@ -71,7 +71,7 @@ const SUBSCRIPTION_PLANS = {
     },
     basic: {
         name: 'Basic',
-        priceInPaise: 99900, // ₹999/month
+        priceInPaise: 14900, 
         currency: 'INR',
         billingCycleDays: 30,
         features: [
@@ -83,7 +83,7 @@ const SUBSCRIPTION_PLANS = {
     },
     pro: {
         name: 'Pro',
-        priceInPaise: 199900, // ₹1,999/month
+        priceInPaise: 29900, 
         currency: 'INR',
         billingCycleDays: 30,
         features: [
@@ -95,7 +95,7 @@ const SUBSCRIPTION_PLANS = {
     },
     enterprise: {
         name: 'Enterprise',
-        priceInPaise: 499900, // ₹4,999/month
+        priceInPaise: 39900,  
         currency: 'INR',
         billingCycleDays: 30,
         features: [
