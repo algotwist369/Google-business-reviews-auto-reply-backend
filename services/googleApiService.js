@@ -1,6 +1,7 @@
 const axios = require('axios');
 const { GOOGLE_API } = require('../utils/constants');
 const tokenRefreshService = require('./tokenRefreshService');
+const User = require('../models/User');
 
 /**
  * Google API Service - Handles all Google My Business API calls with proper error handling and retry logic
@@ -13,6 +14,40 @@ class GoogleApiService {
                 'Content-Type': 'application/json'
             }
         });
+        // Cache to track users without refresh tokens (prevents repeated DB queries)
+        // Key: userId, Value: { hasRefreshToken: boolean, lastChecked: timestamp }
+        this.tokenCache = new Map();
+        // Cache expiry: 1 hour
+        this.cacheExpiry = 60 * 60 * 1000;
+    }
+
+    /**
+     * Check if user has refresh token (with caching to prevent repeated DB queries)
+     */
+    async hasRefreshToken(userId) {
+        const cached = this.tokenCache.get(userId);
+        const now = Date.now();
+        
+        if (cached && (now - cached.lastChecked) < this.cacheExpiry) {
+            return cached.hasRefreshToken;
+        }
+
+        try {
+            const user = await User.findById(userId).select('googleRefreshToken').lean();
+            const hasToken = !!(user && user.googleRefreshToken);
+            this.tokenCache.set(userId, { hasRefreshToken: hasToken, lastChecked: now });
+            return hasToken;
+        } catch (error) {
+            console.error(`Error checking refresh token for user ${userId}:`, error.message);
+            return false;
+        }
+    }
+
+    /**
+     * Clear token cache for a user (call after successful refresh or token update)
+     */
+    clearTokenCache(userId) {
+        this.tokenCache.delete(userId);
     }
 
     /**
@@ -37,19 +72,47 @@ class GoogleApiService {
             const response = await this.axiosInstance(config);
             return response.data;
         } catch (error) {
+            // Handle 403 scope errors gracefully
+            if (error.response?.status === 403) {
+                const errorData = error.response.data || {};
+                if (errorData.error?.code === 403 && errorData.error?.message?.includes('insufficient authentication scopes')) {
+                    const userId = typeof userOrId === 'string' ? userOrId : userOrId?._id?.toString();
+                    if (userId) {
+                        console.warn(`User ${userId} has insufficient OAuth scopes. User needs to re-authenticate with proper scopes.`);
+                    }
+                    throw new Error(
+                        `Google API Error: 403 - Insufficient authentication scopes. User needs to re-authenticate.`
+                    );
+                }
+            }
+
             // If we get a 401 and have a user/userId, try to refresh the token
             if (error.response?.status === 401 && userOrId && !retried) {
-                try {
-                    const userId = typeof userOrId === 'string' ? userOrId : userOrId._id?.toString();
-                    if (userId) {
-                        console.log(`Attempting to refresh token for user ${userId} after 401 error`);
-                        const newAccessToken = await tokenRefreshService.refreshAndSaveUserToken(userId);
-                        // Retry the request with the new token
-                        return this.makeRequest(newAccessToken, method, url, data, params, userOrId, true);
+                const userId = typeof userOrId === 'string' ? userOrId : userOrId._id?.toString();
+                if (userId) {
+                    // Check if user has refresh token before attempting refresh
+                    const canRefresh = await this.hasRefreshToken(userId);
+                    if (canRefresh) {
+                        try {
+                            const newAccessToken = await tokenRefreshService.refreshAndSaveUserToken(userId);
+                            // Clear cache after successful refresh
+                            this.clearTokenCache(userId);
+                            // Retry the request with the new token
+                            return this.makeRequest(newAccessToken, method, url, data, params, userOrId, true);
+                        } catch (refreshError) {
+                            // Clear cache on refresh failure
+                            this.clearTokenCache(userId);
+                            // Only log error message, not the entire user object
+                            const errorMsg = refreshError.message || 'Unknown refresh error';
+                            console.warn(`Token refresh failed for user ${userId}: ${errorMsg}`);
+                            // If refresh fails, throw the original 401 error
+                        }
+                    } else {
+                        // User doesn't have refresh token - log once and skip
+                        console.warn(`User ${userId} has no refresh token. Skipping token refresh. User needs to re-authenticate.`);
+                        // Clear cache to allow re-check after user re-authenticates
+                        this.clearTokenCache(userId);
                     }
-                } catch (refreshError) {
-                    console.error(`Token refresh failed for user ${userOrId}:`, refreshError.message);
-                    // If refresh fails, throw the original 401 error
                 }
             }
 

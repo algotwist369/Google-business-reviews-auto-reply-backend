@@ -108,8 +108,25 @@ class AutoReplyService {
         }
 
         if (!user.googleAccessToken) {
-            console.warn(`Auto-reply skipped (missing token) for user ${user._id}`);
+            console.warn(`Auto-reply skipped (missing access token) for user ${user._id}`);
             return { skipped: true, reason: 'missing-token' };
+        }
+
+        // Check if user has refresh token - if not, they need to re-authenticate
+        // This prevents repeated failed refresh attempts
+        if (!user.googleRefreshToken) {
+            // Only log once per hour to reduce log spam
+            const lastWarning = this._lastNoRefreshTokenWarning || new Map();
+            const userId = user._id.toString();
+            const now = Date.now();
+            const lastWarnTime = lastWarning.get(userId) || 0;
+            
+            if (now - lastWarnTime > 60 * 60 * 1000) { // 1 hour
+                console.warn(`Auto-reply skipped (no refresh token) for user ${userId}. User needs to re-authenticate.`);
+                lastWarning.set(userId, now);
+                this._lastNoRefreshTokenWarning = lastWarning;
+            }
+            return { skipped: true, reason: 'no-refresh-token' };
         }
 
         if (!process.env.OPENAI_API_KEY) {

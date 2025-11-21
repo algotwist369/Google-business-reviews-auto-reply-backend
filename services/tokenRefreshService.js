@@ -51,6 +51,14 @@ class TokenRefreshService {
     }
 
     /**
+     * Check if user has refresh token (lightweight check without full user load)
+     */
+    async hasRefreshToken(userId) {
+        const user = await User.findById(userId).select('googleRefreshToken').lean();
+        return !!(user && user.googleRefreshToken);
+    }
+
+    /**
      * Refresh and save access token for a user
    
      */
@@ -61,7 +69,7 @@ class TokenRefreshService {
         }
 
         if (!user.googleRefreshToken) {
-            throw new Error('No refresh token available. User needs to re-authenticate.');
+            throw new Error('NO_REFRESH_TOKEN');
         }
 
         try {
