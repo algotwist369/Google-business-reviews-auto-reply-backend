@@ -16,6 +16,11 @@ class AutoReplyService {
     constructor() {
         this.interval = null;
         this.isRunning = false;
+        // Track ongoing requests per user to prevent duplicates
+        this.activeUserRequests = new Map();
+        // Track last fetch time per user to prevent rapid successive calls
+        this.lastFetchTime = new Map();
+        this.MIN_FETCH_INTERVAL_MS = 5000; // 5 seconds minimum between fetches for same user
     }
 
     clearReviewCache(userId) {
@@ -102,32 +107,51 @@ class AutoReplyService {
     }
 
     async runForUser(user, { manual = false, reason = 'interval' } = {}) {
-        const settings = this.normalizeSettings(user.autoReplySettings);
-        if (!settings.enabled) {
-            return { skipped: true, reason: 'disabled' };
+        const userId = user._id.toString();
+        
+        // Prevent concurrent runs for the same user
+        if (this.activeUserRequests.has(userId)) {
+            return { skipped: true, reason: 'already-running' };
         }
 
-        if (!user.googleAccessToken) {
-            console.warn(`Auto-reply skipped (missing access token) for user ${user._id}`);
-            return { skipped: true, reason: 'missing-token' };
-        }
-
-        // Check if user has refresh token - if not, they need to re-authenticate
-        // This prevents repeated failed refresh attempts
-        if (!user.googleRefreshToken) {
-            // Only log once per hour to reduce log spam
-            const lastWarning = this._lastNoRefreshTokenWarning || new Map();
-            const userId = user._id.toString();
+        // Prevent rapid successive calls (unless manual)
+        if (!manual) {
+            const lastFetch = this.lastFetchTime.get(userId);
             const now = Date.now();
-            const lastWarnTime = lastWarning.get(userId) || 0;
-            
-            if (now - lastWarnTime > 60 * 60 * 1000) { // 1 hour
-                console.warn(`Auto-reply skipped (no refresh token) for user ${userId}. User needs to re-authenticate.`);
-                lastWarning.set(userId, now);
-                this._lastNoRefreshTokenWarning = lastWarning;
+            if (lastFetch && (now - lastFetch) < this.MIN_FETCH_INTERVAL_MS) {
+                return { skipped: true, reason: 'rate-limited' };
             }
-            return { skipped: true, reason: 'no-refresh-token' };
         }
+
+        this.activeUserRequests.set(userId, true);
+        this.lastFetchTime.set(userId, Date.now());
+
+        try {
+            const settings = this.normalizeSettings(user.autoReplySettings);
+            if (!settings.enabled) {
+                return { skipped: true, reason: 'disabled' };
+            }
+
+            if (!user.googleAccessToken) {
+                console.warn(`Auto-reply skipped (missing access token) for user ${userId}`);
+                return { skipped: true, reason: 'missing-token' };
+            }
+
+            // Check if user has refresh token - if not, they need to re-authenticate
+            // This prevents repeated failed refresh attempts
+            if (!user.googleRefreshToken) {
+                // Only log once per hour to reduce log spam
+                const lastWarning = this._lastNoRefreshTokenWarning || new Map();
+                const now = Date.now();
+                const lastWarnTime = lastWarning.get(userId) || 0;
+                
+                if (now - lastWarnTime > 60 * 60 * 1000) { // 1 hour
+                    console.warn(`Auto-reply skipped (no refresh token) for user ${userId}. User needs to re-authenticate.`);
+                    lastWarning.set(userId, now);
+                    this._lastNoRefreshTokenWarning = lastWarning;
+                }
+                return { skipped: true, reason: 'no-refresh-token' };
+            }
 
         if (!process.env.OPENAI_API_KEY) {
             console.warn('Auto-reply skipped (missing OPENAI_API_KEY).');
@@ -153,21 +177,28 @@ class AutoReplyService {
         if (latestReviewTime) {
             nextSettings.lastReviewSyncAt = new Date(latestReviewTime);
         }
-        user.autoReplySettings = nextSettings;
-        await user.save();
+            user.autoReplySettings = nextSettings;
+            await user.save();
 
-        return { success: true, account: account.name, reason };
+            return { success: true, account: account.name, reason };
+        } finally {
+            // Always clear the active request flag
+            this.activeUserRequests.delete(userId);
+        }
     }
 
     async fetchReviews(user) {
         try {
-            const accountResponse = await googleApiService.getAccounts(user.googleAccessToken, user);
+            // Use user ID string for token refresh to avoid passing full user object
+            const userId = user._id.toString();
+            
+            const accountResponse = await googleApiService.getAccounts(user.googleAccessToken, userId);
             const account = accountResponse.accounts?.[0];
             if (!account) {
                 return { account: null, locationsWithReviews: [], latestReviewTime: null };
             }
 
-            const locations = await googleApiService.getLocations(user.googleAccessToken, account.name, user);
+            const locations = await googleApiService.getLocations(user.googleAccessToken, account.name, userId);
             if (!locations.length) {
                 return { account, locationsWithReviews: [], latestReviewTime: null };
             }
@@ -185,7 +216,7 @@ class AutoReplyService {
                 account.name,
                 locations,
                 since ? { since } : {},
-                user
+                userId
             );
 
             let latestReviewTime = lastSync ? lastSync.getTime() : 0;
@@ -432,11 +463,13 @@ class AutoReplyService {
                     throw new Error('Missing generated reply');
                 }
 
+                // Use userId string instead of full user object
+                const userId = user._id.toString();
                 await googleApiService.replyToReview(
                     user.googleAccessToken,
                     task.reviewName,
                     task.generatedReply,
-                    user
+                    userId
                 );
 
                 await AutoReplyTask.findByIdAndUpdate(task._id, {

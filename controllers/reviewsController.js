@@ -38,8 +38,11 @@ const getReviews = asyncHandler(async (req, res) => {
     }
 
     try {
+        // Use userId string instead of full user object to prevent logging issues
+        const userId = user._id.toString();
+        
         // Fetch from Google API
-        const accountRes = await googleApiService.getAccounts(user.googleAccessToken, user);
+        const accountRes = await googleApiService.getAccounts(user.googleAccessToken, userId);
         const account = accountRes.accounts?.[0];
 
         if (!account) {
@@ -50,7 +53,7 @@ const getReviews = asyncHandler(async (req, res) => {
         const locations = await googleApiService.getLocations(
             user.googleAccessToken,
             account.name,
-            user
+            userId
         );
 
         // Filter by location if specified
@@ -68,7 +71,7 @@ const getReviews = asyncHandler(async (req, res) => {
             account.name,
             targetLocations,
             {},
-            user
+            userId
         );
 
         // Process all reviews for filtering and sorting
@@ -202,8 +205,11 @@ const getAllReviews = asyncHandler(async (req, res) => {
     }
 
     try {
+        // Use userId string instead of full user object to prevent logging issues
+        const userId = user._id.toString();
+        
         // Fetch from Google API
-        const accountRes = await googleApiService.getAccounts(user.googleAccessToken, user);
+        const accountRes = await googleApiService.getAccounts(user.googleAccessToken, userId);
         const account = accountRes.accounts?.[0];
 
         if (!account) {
@@ -214,7 +220,7 @@ const getAllReviews = asyncHandler(async (req, res) => {
         const locations = await googleApiService.getLocations(
             user.googleAccessToken,
             account.name,
-            user
+            userId
         );
 
         // Batch fetch reviews
@@ -223,7 +229,7 @@ const getAllReviews = asyncHandler(async (req, res) => {
             account.name,
             locations,
             {},
-            user
+            userId
         );
 
         // Cache the response

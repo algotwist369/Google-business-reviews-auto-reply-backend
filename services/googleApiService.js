@@ -97,21 +97,26 @@ class GoogleApiService {
                             const newAccessToken = await tokenRefreshService.refreshAndSaveUserToken(userId);
                             // Clear cache after successful refresh
                             this.clearTokenCache(userId);
-                            // Retry the request with the new token
-                            return this.makeRequest(newAccessToken, method, url, data, params, userOrId, true);
+                            // Retry the request with the new token (pass userId string, not full object)
+                            return this.makeRequest(newAccessToken, method, url, data, params, userId, true);
                         } catch (refreshError) {
                             // Clear cache on refresh failure
                             this.clearTokenCache(userId);
                             // Only log error message, not the entire user object
                             const errorMsg = refreshError.message || 'Unknown refresh error';
-                            console.warn(`Token refresh failed for user ${userId}: ${errorMsg}`);
-                            // If refresh fails, throw the original 401 error
+                            // Don't log NO_REFRESH_TOKEN errors here - they're already handled above
+                            if (errorMsg !== 'NO_REFRESH_TOKEN') {
+                                console.warn(`Token refresh failed for user ${userId}: ${errorMsg}`);
+                            }
+                            // If refresh fails, throw the original 401 error (don't retry)
+                            throw error;
                         }
                     } else {
-                        // User doesn't have refresh token - log once and skip
-                        console.warn(`User ${userId} has no refresh token. Skipping token refresh. User needs to re-authenticate.`);
+                        // User doesn't have refresh token - don't log here (already logged in auto-reply service)
                         // Clear cache to allow re-check after user re-authenticates
                         this.clearTokenCache(userId);
+                        // Throw the original 401 error
+                        throw error;
                     }
                 }
             }
