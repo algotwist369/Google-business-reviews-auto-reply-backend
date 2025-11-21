@@ -1,7 +1,9 @@
 const jwt = require('jsonwebtoken');
 const User = require('../models/User');
+const BlacklistedToken = require('../models/BlacklistedToken');
 const { AppError } = require('../utils/errorHandler');
 const asyncHandler = require('../utils/asyncHandler');
+const { hashToken } = require('../utils/tokenUtils');
 
 /**
  * Verify JWT token and attach user to request
@@ -19,6 +21,12 @@ const verifyToken = asyncHandler(async (req, res, next) => {
     }
 
     try {
+        const tokenHash = hashToken(token);
+        const isBlacklisted = await BlacklistedToken.exists({ tokenHash });
+        if (isBlacklisted) {
+            return next(new AppError('Session expired. Please log in again.', 401));
+        }
+
         // Verify token
         const decoded = jwt.verify(token, process.env.SESSION_SECRET);
         
